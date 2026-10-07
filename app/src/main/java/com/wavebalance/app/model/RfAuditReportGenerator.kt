@@ -69,10 +69,11 @@ object RfAuditReportGenerator {
         sb.appendLine()
         if (recommendation != null) {
             sb.appendLine("- **Target Band**: ${recommendation.band.label}")
-            sb.appendLine("- **Current Channel**: Channel ${recommendation.currentChannel} (Health Score: ${recommendation.currentScore}/100)")
+            sb.appendLine("- **Current Channel**: ${if (recommendation.currentChannelEvaluated) "Channel ${recommendation.currentChannel} (Health Score: ${recommendation.currentScore}/100)" else "Not evaluated"}")
             sb.appendLine("- **Calculated Optimal Channel**: Channel ${recommendation.recommendedChannel} (Health Score: ${recommendation.recommendedScore}/100)")
             sb.appendLine("- **Clarity Headroom Gain**: +${recommendation.scoreDelta} pts")
             sb.appendLine("- **Bandwidth Configuration**: ${recommendation.recommendedBandwidth.label}")
+            sb.appendLine("- **Bonded Center**: ${recommendation.recommendedCenterFrequencyMhz} MHz (channel ${FrequencyBand.frequencyToChannel(recommendation.recommendedCenterFrequencyMhz)})")
             sb.appendLine("- **Diagnosis**: ${recommendation.reasonSummary}")
             sb.appendLine()
             sb.appendLine("### Actionable Router Directives:")

@@ -4,7 +4,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -36,21 +35,13 @@ enum class AppDestination(
         group = DestinationGroup.OVERVIEW,
         shortcut = "D"
     ),
-    RADAR(
-        label = "Radar",
-        subtitle = "Spectrum Scanner & Radar",
+    NETWORKS(
+        label = "Networks",
+        subtitle = "Radar, Access Points & Details",
         icon = Icons.Default.WifiTethering,
-        contentDescription = "Spectrum Radar & APs",
+        contentDescription = "Networks: radar, list and details",
         group = DestinationGroup.ANALYZE,
-        shortcut = "R"
-    ),
-    DETAILS(
-        label = "AP Details",
-        subtitle = "Access Point Deep Dive",
-        icon = Icons.Default.Router,
-        contentDescription = "Access Point Deep Dive",
-        group = DestinationGroup.ANALYZE,
-        shortcut = "A"
+        shortcut = "N"
     ),
     OPTIMIZER(
         label = "Optimizer",
@@ -74,7 +65,6 @@ enum class AppDestination(
         icon = Icons.Default.Speed,
         contentDescription = "Speed & Latency Diagnostic",
         group = DestinationGroup.TOOLS,
-        shortcut = "T",
-        inBottomBar = false
+        shortcut = "T"
     )
 }

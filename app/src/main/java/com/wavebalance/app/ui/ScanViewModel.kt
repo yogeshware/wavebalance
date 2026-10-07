@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wavebalance.app.data.MLabNdt7Server
-import com.wavebalance.app.data.ScanStatus
+import com.wavebalance.app.model.ScanStatus
 import com.wavebalance.app.data.WifiScanEngine
 import com.wavebalance.app.model.AccessPoint
 import com.wavebalance.app.model.ActiveConnectionInfo
@@ -28,6 +28,8 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
     val engine = WifiScanEngine(application)
 
+    // Analysis uses the complete scan; Radar filters only change its displayed list.
+    val allAccessPoints: StateFlow<List<AccessPoint>> = engine.accessPoints
     val activeConnection: StateFlow<ActiveConnectionInfo?> = engine.activeConnection
     val scanStatus: StateFlow<ScanStatus> = engine.scanStatus
     val isMockMode: StateFlow<Boolean> = engine.isMockMode
@@ -85,7 +87,8 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
             val matchesBand = band == null || ap.band == band
             val matchesQuery = query.isBlank() ||
                     ap.ssid.contains(query, ignoreCase = true) ||
-                    ap.bssid.contains(query, ignoreCase = true)
+                    ap.bssid.contains(query, ignoreCase = true) ||
+                    WifiVendorLookup.getVendor(ap.bssid).contains(query, ignoreCase = true)
             matchesBand && matchesQuery
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -217,6 +220,12 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleMockMode(enabled: Boolean) {
+        if (enabled == isMockMode.value) return
+        _selectedAp.value = null
+        _rssiHistory.value = emptyMap()
+        _roamingHistory.value = emptyList()
+        lastScanSampleTime.clear()
+        lastActiveConn = null
         engine.setMockMode(enabled)
     }
 
@@ -224,8 +233,8 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         engine.toggleHomeTag(bssid)
     }
 
-    fun simulateChannelMigration(newChannel: Int, newWidth: com.wavebalance.app.model.ChannelWidth = com.wavebalance.app.model.ChannelWidth.WIDTH_80) {
-        engine.simulateChannelMigration(newChannel, newWidth)
+    fun simulateChannelMigration(newChannel: Int, newWidth: com.wavebalance.app.model.ChannelWidth, band: FrequencyBand, centerFrequencyMhz: Int) {
+        engine.simulateChannelMigration(newChannel, newWidth, band, centerFrequencyMhz)
     }
 
     fun simulateRoamToCandidate() {
@@ -244,7 +253,8 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         val recommendation = com.wavebalance.app.model.ChannelOptimizerEngine.evaluateBand(
             band = conn?.band ?: FrequencyBand.BAND_5_GHZ,
             allAps = engine.accessPoints.value,
-            currentChannel = conn?.channel ?: 36,
+            currentChannel = conn?.channel ?: 0,
+            targetWidth = conn?.channelWidth ?: com.wavebalance.app.model.ChannelWidth.UNKNOWN,
             ownNetworkBssids = NetworkGroups.ownNetwork(engine.accessPoints.value, conn?.bssid, conn?.cleanSsid)
         )
         val markdown = com.wavebalance.app.model.RfAuditReportGenerator.generateMarkdownReport(

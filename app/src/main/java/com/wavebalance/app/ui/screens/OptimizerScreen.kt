@@ -55,6 +55,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -92,7 +93,7 @@ fun OptimizerScreen(
     modifier: Modifier = Modifier
 ) {
     val activeConn by viewModel.activeConnection.collectAsState()
-    val allAps by viewModel.filteredAccessPoints.collectAsState()
+    val allAps by viewModel.allAccessPoints.collectAsState()
     val isMockMode by viewModel.isMockMode.collectAsState()
     val ownNetworkBssids by viewModel.ownNetworkBssids.collectAsState()
 
@@ -100,29 +101,18 @@ fun OptimizerScreen(
     val clipboardManager = LocalClipboardManager.current
 
     // Active band or selected band
-    var selectedBand by remember {
+    var selectedBand by rememberSaveable {
         mutableStateOf(activeConn?.band ?: FrequencyBand.BAND_5_GHZ)
     }
 
-    var selectedWidth by remember {
-        mutableStateOf(ChannelWidth.WIDTH_80)
+    var selectedWidth by rememberSaveable {
+        mutableStateOf(ChannelWidth.defaultForBand(selectedBand))
     }
 
-    val currentChannel = remember(activeConn, selectedBand) {
-        if (activeConn != null && activeConn?.band == selectedBand) {
-            activeConn?.channel ?: 48
-        } else {
-            when (selectedBand) {
-                FrequencyBand.BAND_2_4_GHZ -> 6
-                FrequencyBand.BAND_5_GHZ -> 48
-                FrequencyBand.BAND_6_GHZ -> 37
-                FrequencyBand.UNKNOWN -> 48
-            }
-        }
-    }
+    val currentChannel = activeConn?.takeIf { it.band == selectedBand }?.channel ?: 0
 
-    val activeAp = remember(allAps, activeConn) {
-        allAps.find { it.isConnected } ?: allAps.firstOrNull { it.channel == currentChannel }
+    val activeAp = remember(allAps, selectedBand, currentChannel) {
+        allAps.find { it.isConnected && it.band == selectedBand }
     }
 
     val recommendation = remember(selectedBand, allAps, currentChannel, selectedWidth, ownNetworkBssids) {
@@ -135,7 +125,7 @@ fun OptimizerScreen(
         )
     }
 
-    var migrationApplied by remember { mutableStateOf(false) }
+    var migrationApplied by rememberSaveable(isMockMode, selectedBand, selectedWidth) { mutableStateOf(false) }
 
     val rankedScores = remember(recommendation) {
         recommendation.channelScores.sortedByDescending { it.score }
@@ -171,7 +161,7 @@ fun OptimizerScreen(
                                 selectedBand = b
                                 // Adjust bandwidth sensible default
                                 if (b == FrequencyBand.BAND_2_4_GHZ) selectedWidth = ChannelWidth.WIDTH_20
-                                else if (b == FrequencyBand.BAND_5_GHZ && selectedWidth == ChannelWidth.WIDTH_320) selectedWidth = ChannelWidth.WIDTH_80
+                                else if (selectedWidth !in ChannelWidth.supportedForBand(b)) selectedWidth = ChannelWidth.defaultForBand(b)
                             },
                             label = { Text(label, fontSize = 12.sp) },
                             colors = FilterChipDefaults.filterChipColors(
@@ -186,12 +176,7 @@ fun OptimizerScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // Bandwidth selector chips
-                val widths = when (selectedBand) {
-                    FrequencyBand.BAND_2_4_GHZ -> listOf(ChannelWidth.WIDTH_20, ChannelWidth.WIDTH_40)
-                    FrequencyBand.BAND_5_GHZ -> listOf(ChannelWidth.WIDTH_20, ChannelWidth.WIDTH_40, ChannelWidth.WIDTH_80, ChannelWidth.WIDTH_160)
-                    FrequencyBand.BAND_6_GHZ -> listOf(ChannelWidth.WIDTH_80, ChannelWidth.WIDTH_160, ChannelWidth.WIDTH_320)
-                    FrequencyBand.UNKNOWN -> listOf(ChannelWidth.WIDTH_20, ChannelWidth.WIDTH_40, ChannelWidth.WIDTH_80)
-                }
+                val widths = ChannelWidth.supportedForBand(selectedBand)
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -220,7 +205,7 @@ fun OptimizerScreen(
         )
     }
     val spectrumGraph: @Composable () -> Unit = {
-        BeforeAfterSpectrumGraph(
+        if (recommendation.currentChannelEvaluated) BeforeAfterSpectrumGraph(
             band = selectedBand,
             currentChannel = recommendation.currentChannel,
             recommendedChannel = recommendation.recommendedChannel,
@@ -228,8 +213,17 @@ fun OptimizerScreen(
             recommendedScore = recommendation.recommendedScore,
             activeAp = activeAp,
             allAps = allAps,
-            targetWidth = selectedWidth
-        )
+            targetWidth = recommendation.recommendedBandwidth,
+            currentWidth = recommendation.currentBandwidth,
+            currentCenterFrequencyMhz = recommendation.currentCenterFrequencyMhz,
+            recommendedCenterFrequencyMhz = recommendation.recommendedCenterFrequencyMhz
+        ) else {
+            Text(
+                text = "No supported current block is available for comparison in ${selectedBand.label}. Candidate scores are shown below; verify support in your router.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
     val routerDirectives: @Composable () -> Unit = {
         RouterDirectivesCard(
@@ -242,7 +236,9 @@ fun OptimizerScreen(
             onSimulateMigration = {
                 viewModel.simulateChannelMigration(
                     newChannel = recommendation.recommendedChannel,
-                    newWidth = recommendation.recommendedBandwidth
+                    newWidth = recommendation.recommendedBandwidth,
+                    band = recommendation.band,
+                    centerFrequencyMhz = recommendation.recommendedCenterFrequencyMhz
                 )
                 migrationApplied = true
                 Toast.makeText(context, "Applied migration to Channel ${recommendation.recommendedChannel} in simulation!", Toast.LENGTH_SHORT).show()
@@ -299,7 +295,7 @@ fun OptimizerScreen(
             secondary = {
                 matrixHeader()
                 rankedScores.forEach { channelScore ->
-                    key("${channelScore.band}_${channelScore.channel}") {
+                    key("${channelScore.band}_${channelScore.channel}_${channelScore.centerFrequencyMhz}") {
                         ChannelScoreCard(channelScore = channelScore)
                     }
                 }
@@ -333,7 +329,7 @@ fun OptimizerScreen(
         // Channel Score Cards
         items(
             items = rankedScores,
-            key = { "${it.band}_${it.channel}" }
+            key = { "${it.band}_${it.channel}_${it.centerFrequencyMhz}" }
         ) { channelScore ->
             ChannelScoreCard(channelScore = channelScore)
         }
@@ -418,9 +414,10 @@ private fun OptimizationImpactHeroCard(
                 // Current Score Box
                 ScoreBox(
                     label = "CURRENT",
-                    channel = "Ch ${recommendation.currentChannel}",
+                    channel = if (recommendation.currentChannelEvaluated) "Ch ${recommendation.currentChannel}" else "Unknown",
                     score = recommendation.currentScore,
-                    color = if (recommendation.currentScore >= 75) PrimaryContainerBlue else TertiaryContainerAmber
+                    color = if (recommendation.currentScore >= 75) PrimaryContainerBlue else TertiaryContainerAmber,
+                    evaluated = recommendation.currentChannelEvaluated
                 )
 
                 Icon(
@@ -478,7 +475,8 @@ private fun ScoreBox(
     label: String,
     channel: String,
     score: Int,
-    color: Color
+    color: Color,
+    evaluated: Boolean = true
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
@@ -505,7 +503,7 @@ private fun ScoreBox(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "$score/100",
+                text = if (evaluated) "$score/100" else "N/A",
                 fontSize = 20.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = color
@@ -522,7 +520,7 @@ private fun RouterDirectivesCard(
     // Null outside simulated data: migrating would overwrite real readings with made-up ones
     onSimulateMigration: (() -> Unit)?
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -682,7 +680,7 @@ private fun StepItem(step: RouterStep) {
 
 @Composable
 private fun ChannelScoreCard(channelScore: ChannelScore) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by rememberSaveable { mutableStateOf(false) }
 
     val scoreColor = when (channelScore.rating) {
         ChannelRating.OPTIMAL -> SecondaryContainerEmerald
@@ -713,7 +711,7 @@ private fun ChannelScoreCard(channelScore: ChannelScore) {
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Channel ${channelScore.channel}",
+                                text = "Ch ${channelScore.channel} · center ${FrequencyBand.frequencyToChannel(channelScore.centerFrequencyMhz)}",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface

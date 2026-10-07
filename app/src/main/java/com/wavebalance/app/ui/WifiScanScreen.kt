@@ -44,14 +44,17 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.wavebalance.app.data.ScanStatus
+import com.wavebalance.app.model.ScanStatus
 import com.wavebalance.app.model.AccessPoint
 import com.wavebalance.app.model.FrequencyBand
 import com.wavebalance.app.ui.components.AccessPointItemCard
@@ -71,6 +74,7 @@ enum class ApSortOption(val label: String) {
 @Composable
 fun WifiScanScreen(
     viewModel: ScanViewModel,
+    onTextInputFocusChanged: (Boolean) -> Unit = {},
     onRequestPermissions: () -> Unit,
     onNavigateToDetails: (AccessPoint) -> Unit = {},
     modifier: Modifier = Modifier
@@ -85,9 +89,13 @@ fun WifiScanScreen(
 
     val hasPerms = viewModel.hasPermissions()
 
-    var sortOption by remember { mutableStateOf(ApSortOption.SIGNAL) }
+    DisposableEffect(Unit) {
+        onDispose { onTextInputFocusChanged(false) }
+    }
+
+    var sortOption by rememberSaveable { mutableStateOf(ApSortOption.SIGNAL) }
     var selectedApForGraph by remember { mutableStateOf<AccessPoint?>(null) }
-    var showOnlyHomeAps by remember { mutableStateOf(false) }
+    var showOnlyHomeAps by rememberSaveable { mutableStateOf(false) }
 
     // Band for parabolic graph: if user has selected a specific band, use it; otherwise default to active band or 5 GHz
     val graphBand = selectedBand ?: (activeConn?.band ?: FrequencyBand.BAND_5_GHZ)
@@ -395,6 +403,18 @@ fun WifiScanScreen(
                     }
                 }
             }
+            is ScanStatus.Cached -> item {
+                Text(
+                    text = "Showing cached results. " + (status.lastMeasuredAt?.let {
+                        "Last measured " + java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it))
+                    } ?: "Measurement time is unknown."),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TertiaryContainerAmber
+                )
+            }
+            is ScanStatus.Error -> item {
+                Text(status.message, color = MaterialTheme.colorScheme.error)
+            }
             else -> {}
         }
 
@@ -403,7 +423,7 @@ fun WifiScanScreen(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { viewModel.setSearchQuery(it) },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().onFocusChanged { onTextInputFocusChanged(it.isFocused) },
                 shape = RoundedCornerShape(12.dp),
                 placeholder = {
                     Text(

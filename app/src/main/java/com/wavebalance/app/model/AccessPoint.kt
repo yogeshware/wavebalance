@@ -1,5 +1,10 @@
 package com.wavebalance.app.model
 
+/** Refresh connection badges independently of Android's throttled scan results. */
+internal fun List<AccessPoint>.withConnectedBssid(activeBssid: String?): List<AccessPoint> = map { ap ->
+    ap.copy(isConnected = !activeBssid.isNullOrBlank() && ap.bssid.equals(activeBssid, ignoreCase = true))
+}
+
 data class AccessPoint(
     val bssid: String,
     val ssid: String,

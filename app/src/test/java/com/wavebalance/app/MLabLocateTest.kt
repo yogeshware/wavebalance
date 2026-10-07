@@ -5,8 +5,48 @@ import com.wavebalance.app.model.SpeedTestException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MLabLocateTest {
+
+    private fun candidate(download: String, upload: String): JSONObject = JSONObject()
+        .put("urls", JSONObject()
+            .put("wss:///ndt/v7/download", download)
+            .put("wss:///ndt/v7/upload", upload))
+
+    @Test
+    fun malformedAndInsecureCandidates_doNotDiscardAValidFallback() {
+        val validDownload = "wss://valid.example/ndt/v7/download"
+        val validUpload = "wss://valid.example/ndt/v7/upload"
+        val results = JSONArray()
+            .put(candidate("wss://bad host/ndt/v7/download", validUpload))
+            .put(candidate(validDownload, "wss://bad host/ndt/v7/upload"))
+            .put(candidate("ws://insecure.example/ndt/v7/download", validUpload))
+            .put(candidate(validDownload, "ws://insecure.example/ndt/v7/upload"))
+            .put(candidate("wss:///ndt/v7/download", validUpload))
+            .put(candidate(validDownload, "wss:///ndt/v7/upload"))
+            .put(candidate("wss://user:password@valid.example/download", validUpload))
+            .put(candidate(validDownload, validUpload))
+        val servers = MLabNdt7Server.parseLocateResponse(JSONObject().put("results", results).toString())
+
+        assertEquals(1, servers.size)
+        assertEquals("valid.example", servers.single().host)
+    }
+
+    @Test
+    fun nonObjectCandidates_areSkipped() {
+        val results = JSONArray().put(JSONObject.NULL).put("unusable")
+            .put(candidate("wss://valid.example/download", "wss://valid.example/upload"))
+        val servers = MLabNdt7Server.parseLocateResponse(JSONObject().put("results", results).toString())
+        assertEquals("valid.example", servers.single().host)
+    }
+
+    @Test(expected = SpeedTestException::class)
+    fun malformedUrlsWithoutAFallback_areAHandledTestError() {
+        val results = JSONArray().put(candidate("wss://bad host/download", "wss://bad host/upload"))
+        MLabNdt7Server.parseLocateResponse(JSONObject().put("results", results).toString())
+    }
 
     // Shaped like a real locate v2 answer; tokens shortened
     private val response = """

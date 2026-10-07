@@ -39,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,9 +81,12 @@ fun BeforeAfterSpectrumGraph(
     activeAp: AccessPoint?,
     allAps: List<AccessPoint>,
     targetWidth: ChannelWidth = ChannelWidth.WIDTH_80,
+    currentWidth: ChannelWidth = targetWidth,
+    currentCenterFrequencyMhz: Int? = null,
+    recommendedCenterFrequencyMhz: Int = FrequencyBand.channelToFrequency(recommendedChannel, band),
     modifier: Modifier = Modifier
 ) {
-    var viewState by remember { mutableStateOf(SpectrumViewState.BEFORE_CURRENT) }
+    var viewState by rememberSaveable { mutableStateOf(SpectrumViewState.BEFORE_CURRENT) }
 
     val channelConfig = remember(band) {
         when (band) {
@@ -99,8 +103,8 @@ fun BeforeAfterSpectrumGraph(
                 bandLabel = "5 GHz Spectrum"
             )
             FrequencyBand.BAND_6_GHZ -> BandGraphConfig(
-                startChannel = 1,
-                endChannel = 225,
+                startChannel = -1,
+                endChannel = 235,
                 channelMarkers = listOf(1, 37, 69, 101, 133, 165, 197, 221),
                 bandLabel = "6 GHz Spectrum"
             )
@@ -249,9 +253,11 @@ fun BeforeAfterSpectrumGraph(
             Spacer(modifier = Modifier.height(14.dp))
 
             // Canvas Before / After Spectrum Chart
-            val displayChannel = if (viewState == SpectrumViewState.BEFORE_CURRENT) currentChannel else recommendedChannel
+            val currentCenter = currentCenterFrequencyMhz ?: FrequencyBand.channelToFrequency(currentChannel, band)
+            val displayCenter = if (viewState == SpectrumViewState.BEFORE_CURRENT) currentCenter else recommendedCenterFrequencyMhz
+            val displayWidth = if (viewState == SpectrumViewState.BEFORE_CURRENT) currentWidth else targetWidth
             val animatedChannel by animateFloatAsState(
-                targetValue = displayChannel.toFloat(),
+                targetValue = FrequencyBand.frequencyToChannelPosition(displayCenter, band),
                 animationSpec = tween(durationMillis = 400, easing = FastOutSlowInEasing),
                 label = "channel_transition"
             )
@@ -326,8 +332,9 @@ fun BeforeAfterSpectrumGraph(
                         val peakY = rssiToY(ap.rssi)
                         val halfWidthPx = (ap.channelWidth.mhz / 10f) * pxPerChannel
 
-                        val isCollidingWithCurrent = ap.channel == currentChannel ||
-                                (band == FrequencyBand.BAND_5_GHZ && (ap.channel in (currentChannel - 8)..(currentChannel + 8)))
+                        val isCollidingWithCurrent =
+                            ap.centerFrequencyMhz - ap.channelWidth.mhz / 2 < currentCenter + currentWidth.mhz / 2 &&
+                            ap.centerFrequencyMhz + ap.channelWidth.mhz / 2 > currentCenter - currentWidth.mhz / 2
 
                         val neighborColor = if (viewState == SpectrumViewState.BEFORE_CURRENT && isCollidingWithCurrent) {
                             TertiaryContainerAmber.copy(alpha = 0.85f)
@@ -380,7 +387,7 @@ fun BeforeAfterSpectrumGraph(
                     val activeX = chToX(animatedChannel)
                     val activeRssi = activeAp?.rssi ?: -52
                     val activePeakY = rssiToY(activeRssi)
-                    val activeHalfWidthPx = (targetWidth.mhz / 10f) * pxPerChannel
+                    val activeHalfWidthPx = (displayWidth.mhz / 10f) * pxPerChannel
 
                     val activeThemeColor = if (viewState == SpectrumViewState.BEFORE_CURRENT) {
                         PrimaryContainerBlue
@@ -496,7 +503,7 @@ fun BeforeAfterSpectrumGraph(
                 }
 
                 Text(
-                    text = "${targetWidth.label} Channel Envelope",
+                    text = "${displayWidth.label} · center ${FrequencyBand.frequencyToChannel(displayCenter)}",
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)

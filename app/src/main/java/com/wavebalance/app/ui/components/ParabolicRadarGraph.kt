@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wavebalance.app.model.AccessPoint
@@ -52,7 +53,8 @@ fun ParabolicRadarGraph(
     selectedBand: FrequencyBand,
     selectedAp: AccessPoint? = null,
     onSelectAp: (AccessPoint) -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    chartHeight: Dp = 230.dp
 ) {
     val apsInBand = remember(accessPoints, selectedBand) {
         accessPoints.filter { it.band == selectedBand }
@@ -151,14 +153,14 @@ fun ParabolicRadarGraph(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(230.dp)
+                    .height(chartHeight)
                     .clip(RoundedCornerShape(12.dp))
                     .background(Color(0xFF060E20))
             ) {
                 Canvas(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(230.dp)
+                        .height(chartHeight)
                         .pointerInput(apsInBand) {
                             detectTapGestures { offset ->
                                 // Hit test closest dome peak
@@ -333,7 +335,9 @@ fun ParabolicRadarGraph(
                         }
                     }
 
-                    // 4. Draw X-Axis Channel Markers
+                    // 4. Draw X-Axis Channel Markers. Every marker gets a tick; a label that
+                    // would run into the previous one is left out (narrow charts, Ch 149/157/165).
+                    var lastLabelRight = Float.NEGATIVE_INFINITY
                     channelConfig.channelMarkers.forEach { ch ->
                         val chFrac = (ch - channelConfig.startChannel).toFloat() /
                                 (channelConfig.endChannel - channelConfig.startChannel).coerceAtLeast(1)
@@ -356,7 +360,12 @@ fun ParabolicRadarGraph(
                                 typeface = android.graphics.Typeface.MONOSPACE
                                 textAlign = android.graphics.Paint.Align.CENTER
                             }
-                            drawText("Ch $ch", markerX, baselineY + 16.dp.toPx(), paint)
+                            val label = "Ch $ch"
+                            val halfWidth = paint.measureText(label) / 2
+                            if (markerX - halfWidth >= lastLabelRight + 4.dp.toPx()) {
+                                drawText(label, markerX, baselineY + 16.dp.toPx(), paint)
+                                lastLabelRight = markerX + halfWidth
+                            }
                         }
                     }
                 }

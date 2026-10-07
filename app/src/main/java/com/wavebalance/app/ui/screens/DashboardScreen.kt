@@ -94,7 +94,7 @@ fun DashboardScreen(
     modifier: Modifier = Modifier
 ) {
     val activeConn by viewModel.activeConnection.collectAsState()
-    val allAps by viewModel.filteredAccessPoints.collectAsState()
+    val allAps by viewModel.allAccessPoints.collectAsState()
     val totalCount by viewModel.totalApCount.collectAsState()
     val stickyAlert by viewModel.stickyClientAlert.collectAsState()
     val roamingHistory by viewModel.roamingHistory.collectAsState()

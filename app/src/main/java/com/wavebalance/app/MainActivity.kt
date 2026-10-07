@@ -55,6 +55,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,6 +66,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
@@ -73,10 +80,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.wavebalance.app.data.ScanStatus
+import com.wavebalance.app.model.ScanStatus
 import com.wavebalance.app.model.SurveyPoint
 import com.wavebalance.app.ui.ScanViewModel
-import com.wavebalance.app.ui.WifiScanScreen
 import com.wavebalance.app.ui.adaptive.LocalWindowLayout
 import com.wavebalance.app.ui.adaptive.WindowLayout
 import com.wavebalance.app.ui.components.PermissionRationaleModal
@@ -85,7 +91,7 @@ import com.wavebalance.app.ui.navigation.AppDestination
 import com.wavebalance.app.ui.navigation.AppLogo
 import com.wavebalance.app.ui.navigation.AppNavigationRail
 import com.wavebalance.app.ui.navigation.NavigationPanel
-import com.wavebalance.app.ui.screens.ApDetailScreen
+import com.wavebalance.app.ui.screens.NetworksScreen
 import com.wavebalance.app.ui.screens.DashboardScreen
 import com.wavebalance.app.ui.screens.OptimizerScreen
 import com.wavebalance.app.ui.screens.SiteSurveyScreen
@@ -115,7 +121,9 @@ fun WaveBalanceAdaptiveApp(
     var currentDestination by rememberSaveable { mutableStateOf(AppDestination.DASHBOARD) }
     // Where the speed test returns to when it is closed with Back or T
     var previousDestination by rememberSaveable { mutableStateOf(AppDestination.DASHBOARD) }
-    var showPermissionModal by remember { mutableStateOf(false) }
+    var showPermissionModal by rememberSaveable { mutableStateOf(false) }
+    var isEditingText by remember { mutableStateOf(false) }
+    val destinationState = rememberSaveableStateHolder()
 
     val navigate: (AppDestination) -> Unit = { destination ->
         if (destination != currentDestination) {
@@ -128,7 +136,7 @@ fun WaveBalanceAdaptiveApp(
         currentDestination = previousDestination
     }
 
-    val allAps by viewModel.filteredAccessPoints.collectAsState()
+    val allAps by viewModel.allAccessPoints.collectAsState()
     val activeConn by viewModel.activeConnection.collectAsState()
     val isMockMode by viewModel.isMockMode.collectAsState()
     val scanStatus by viewModel.scanStatus.collectAsState()
@@ -176,37 +184,45 @@ fun WaveBalanceAdaptiveApp(
     }
 
     val content: @Composable () -> Unit = {
-        DestinationContent(
-            destination = currentDestination,
-            viewModel = viewModel,
-            onNavigate = navigate,
-            onRequestPermissions = {
-                showPermissionModal = false
-                permissionLauncher.launch(requiredPermissions)
-            },
-            onOpenDetailsForActive = {
-                val activeBssid = activeConn?.bssid
-                val target = allAps.find { it.bssid.equals(activeBssid, ignoreCase = true) } ?: allAps.firstOrNull()
-                viewModel.selectAccessPoint(target)
-                navigate(AppDestination.DETAILS)
-            }
-        )
+        destinationState.SaveableStateProvider(currentDestination.name) {
+            DestinationContent(
+                destination = currentDestination,
+                viewModel = viewModel,
+                onNavigate = navigate,
+                onTextInputFocusChanged = { isEditingText = it },
+                onRequestPermissions = {
+                    showPermissionModal = false
+                    permissionLauncher.launch(requiredPermissions)
+                },
+                onOpenDetailsForActive = {
+                    val activeBssid = activeConn?.bssid
+                    val target = allAps.find { it.bssid.equals(activeBssid, ignoreCase = true) } ?: allAps.firstOrNull()
+                    viewModel.selectAccessPoint(target)
+                    navigate(AppDestination.NETWORKS)
+                }
+            )
+        }
     }
+
+    val latestContent by rememberUpdatedState(content)
+    val movableContent = remember { movableContentOf { latestContent() } }
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .focusRequester(focusRequester)
-            .focusable()
             .onKeyEvent { keyEvent ->
-                if (keyEvent.type != KeyEventType.KeyUp) return@onKeyEvent false
+                if (isEditingText || keyEvent.type != KeyEventType.KeyUp ||
+                    keyEvent.isCtrlPressed || keyEvent.isAltPressed || keyEvent.isMetaPressed || keyEvent.isShiftPressed
+                ) return@onKeyEvent false
                 when (keyEvent.key) {
+                    // Numbers follow the navigation panel; R and A were Radar and AP Details
                     Key.One, Key.D -> { navigate(AppDestination.DASHBOARD); true }
-                    Key.Two, Key.R -> { navigate(AppDestination.RADAR); true }
-                    Key.Three, Key.H -> { navigate(AppDestination.SURVEY); true }
-                    Key.Four, Key.A -> { navigate(AppDestination.DETAILS); true }
-                    Key.Five, Key.O -> { navigate(AppDestination.OPTIMIZER); true }
+                    Key.Two, Key.N, Key.R, Key.A -> { navigate(AppDestination.NETWORKS); true }
+                    Key.Three, Key.O -> { navigate(AppDestination.OPTIMIZER); true }
+                    Key.Four, Key.H -> { navigate(AppDestination.SURVEY); true }
+                    Key.Five -> { navigate(AppDestination.SPEED); true }
                     Key.T -> { toggleSpeedTest(); true }
                     Key.S -> { viewModel.toggleMockMode(!isMockMode); true }
                     Key.E -> { viewModel.shareAuditReport(context); true }
@@ -236,6 +252,7 @@ fun WaveBalanceAdaptiveApp(
                     else -> false
                 }
             }
+            .focusable()
     ) {
         val windowLayout = WindowLayout.fromWidth(maxWidth)
 
@@ -269,7 +286,7 @@ fun WaveBalanceAdaptiveApp(
                                 onExport = { viewModel.shareAuditReport(context) },
                                 onScan = { viewModel.triggerScan() }
                             )
-                            Box(modifier = Modifier.weight(1f)) { content() }
+                            Box(modifier = Modifier.weight(1f)) { movableContent() }
                         }
                     }
                 }
@@ -295,7 +312,7 @@ fun WaveBalanceAdaptiveApp(
                                 onExport = { viewModel.shareAuditReport(context) },
                                 onScan = { viewModel.triggerScan() }
                             )
-                            Box(modifier = Modifier.weight(1f)) { content() }
+                            Box(modifier = Modifier.weight(1f)) { movableContent() }
                         }
                     }
                 }
@@ -304,13 +321,13 @@ fun WaveBalanceAdaptiveApp(
                         CompactTopBar(
                             destination = currentDestination,
                             isMockMode = isMockMode,
-                            showSpeedAction = true,
+                            showSpeedAction = false,
                             onMockModeChange = { viewModel.toggleMockMode(it) },
                             onToggleSpeedTest = toggleSpeedTest,
                             onExport = { viewModel.shareAuditReport(context) },
                             onScan = { viewModel.triggerScan() }
                         )
-                        Box(modifier = Modifier.weight(1f)) { content() }
+                        Box(modifier = Modifier.weight(1f)) { movableContent() }
                         AppBottomBar(
                             current = currentDestination,
                             collisionCount = collisionCount,
@@ -342,33 +359,27 @@ private fun DestinationContent(
     viewModel: ScanViewModel,
     onNavigate: (AppDestination) -> Unit,
     onRequestPermissions: () -> Unit,
-    onOpenDetailsForActive: () -> Unit
+    onOpenDetailsForActive: () -> Unit,
+    onTextInputFocusChanged: (Boolean) -> Unit
 ) {
     when (destination) {
         AppDestination.DASHBOARD -> DashboardScreen(
             viewModel = viewModel,
-            onNavigateToRadar = { onNavigate(AppDestination.RADAR) },
+            onNavigateToRadar = { onNavigate(AppDestination.NETWORKS) },
             onNavigateToOptimizer = { onNavigate(AppDestination.OPTIMIZER) },
             onNavigateToSurvey = { onNavigate(AppDestination.SURVEY) },
             onNavigateToSpeedDiagnostic = { onNavigate(AppDestination.SPEED) },
             onNavigateToDetails = onOpenDetailsForActive
         )
-        AppDestination.RADAR -> WifiScanScreen(
+        AppDestination.NETWORKS -> NetworksScreen(
             viewModel = viewModel,
             onRequestPermissions = onRequestPermissions,
-            onNavigateToDetails = { ap ->
-                viewModel.selectAccessPoint(ap)
-                onNavigate(AppDestination.DETAILS)
-            }
+            onTextInputFocusChanged = onTextInputFocusChanged
         )
         AppDestination.SURVEY -> SiteSurveyScreen(viewModel = viewModel)
-        AppDestination.DETAILS -> ApDetailScreen(
-            viewModel = viewModel,
-            onNavigateBack = { onNavigate(AppDestination.RADAR) }
-        )
         AppDestination.OPTIMIZER -> OptimizerScreen(
             viewModel = viewModel,
-            onNavigateToRadar = { onNavigate(AppDestination.RADAR) }
+            onNavigateToRadar = { onNavigate(AppDestination.NETWORKS) }
         )
         AppDestination.SPEED -> SpeedDiagnosticScreen(viewModel = viewModel)
     }
@@ -561,6 +572,8 @@ private fun scanStatusLabel(status: ScanStatus): String = when (status) {
         val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(status.timestamp))
         "${status.count} networks · updated $time"
     }
-    is ScanStatus.Throttled -> "Android limits scans · retry in ${status.secondsCooldown}s"
+    is ScanStatus.Cached -> "${status.count} cached networks · " +
+        (status.lastMeasuredAt?.let { "last measured " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(it)) } ?: "measurement time unknown")
+    is ScanStatus.Throttled -> "Cached results · Android limits scans · retry in ${status.secondsCooldown}s"
     is ScanStatus.Error -> status.message
 }

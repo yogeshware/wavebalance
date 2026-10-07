@@ -56,6 +56,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,9 +94,9 @@ fun SiteSurveyScreen(
     val surveyPoints by viewModel.surveyPoints.collectAsState()
     val surveyAnalytics by viewModel.surveyAnalytics.collectAsState()
 
-    var cursorX by remember { mutableFloatStateOf(0.50f) }
-    var cursorY by remember { mutableFloatStateOf(0.40f) }
-    var displayMode by remember { mutableStateOf(HeatmapDisplayMode.FULL_HEATMAP) }
+    var cursorX by rememberSaveable { mutableFloatStateOf(0.50f) }
+    var cursorY by rememberSaveable { mutableFloatStateOf(0.40f) }
+    var displayMode by rememberSaveable { mutableStateOf(HeatmapDisplayMode.FULL_HEATMAP) }
 
     // Selected room tag
     val currentRoom = remember(cursorX, cursorY) {

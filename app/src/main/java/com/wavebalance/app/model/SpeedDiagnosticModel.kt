@@ -554,10 +554,15 @@ object SpeedDiagnosticEngine {
             if (readings.last().elapsedMs < lastByteMs) readings += ByteSample(lastByteMs, bytes.get())
         }
 
+        val direction = if (phase == DiagnosticPhase.UPLOAD) "upload" else "download"
         if (readings.last().bytes == 0L) {
-            val direction = if (phase == DiagnosticPhase.UPLOAD) "upload" else "download"
             val reason = failure.get()?.message?.let { ": $it" } ?: ""
             throw SpeedTestException("The $direction didn't transfer any data$reason", failure.get())
+        }
+        if (readings.last().elapsedMs <= config.warmupMs) {
+            // No steady-state interval was measured. Reporting success here produces
+            // 0 Mbps and can also award A+ before any loaded-latency probe finishes.
+            throw SpeedTestException("The $direction ended before warm-up finished. Run the test again.")
         }
         return TransferMeasurement(readings, synchronized(loadedPings) { loadedPings.toList() })
     }

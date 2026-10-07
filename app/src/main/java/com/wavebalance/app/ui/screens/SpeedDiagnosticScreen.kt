@@ -54,6 +54,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -132,7 +133,7 @@ fun SpeedDiagnosticScreen(
 
     val result = diagnosticState.result
     val mlabConsentGiven by viewModel.mlabConsentGiven.collectAsState()
-    var showConsentDialog by remember { mutableStateOf(false) }
+    var showConsentDialog by rememberSaveable { mutableStateOf(false) }
 
     if (showConsentDialog) {
         MLabConsentDialog(

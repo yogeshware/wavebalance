@@ -14,6 +14,55 @@ import org.junit.Test
 
 class RoamingMonitorEngineTest {
 
+    private fun connection(ssid: String = "Office_Mesh") = ActiveConnectionInfo(
+        ssid = ssid,
+        bssid = "00:1A:2B:3C:4D:01",
+        rssi = -80,
+        frequencyMhz = 5180,
+        linkSpeedMbps = 50
+    )
+
+    @Test
+    fun stickyClient_doesNotRecommendAnSsidWithDifferentCase() {
+        val neighbor = AccessPoint(
+            bssid = "C4:41:1E:00:11:22",
+            ssid = "office_mesh",
+            rssi = -45,
+            frequencyMhz = 5745
+        )
+        assertNull(RoamingMonitorEngine.evaluateStickyClient(connection(), listOf(neighbor)))
+    }
+
+    @Test
+    fun networkChanges_areNotRoamingEvents() {
+        val previous = connection()
+        for (ssid in listOf("Neighbor", "office_mesh", "", "<unknown ssid>")) {
+            val current = previous.copy(ssid = ssid, bssid = "C4:41:1E:00:11:22")
+            assertNull(RoamingMonitorEngine.detectRoamingTransition(previous, current))
+        }
+    }
+
+    @Test
+    fun unknownNetworkNames_doNotEstablishRoamingIdentity() {
+        for (ssid in listOf("", "<unknown ssid>")) {
+            val previous = connection(ssid)
+            assertNull(RoamingMonitorEngine.detectRoamingTransition(
+                previous, previous.copy(bssid = "C4:41:1E:00:11:22")
+            ))
+        }
+    }
+
+    @Test
+    fun quotedSsidAndBssidCase_areNormalizedForRoaming() {
+        val previous = connection("\"Office_Mesh\"")
+        assertNotNull(RoamingMonitorEngine.detectRoamingTransition(
+            previous, previous.copy(ssid = "Office_Mesh", bssid = "00:1a:2b:3c:4d:02")
+        ))
+        assertNull(RoamingMonitorEngine.detectRoamingTransition(
+            previous, previous.copy(ssid = "Office_Mesh", bssid = previous.bssid.lowercase())
+        ))
+    }
+
     @Test
     fun testStickyClientDetection_Triggered() {
         val activeConn = ActiveConnectionInfo(

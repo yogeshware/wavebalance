@@ -47,7 +47,7 @@ object RoamingMonitorEngine {
         // Find candidate APs on the EXACT same SSID but different BSSID
         val candidate = allAps
             .filter {
-                it.displayName.equals(cleanSsid, ignoreCase = true) &&
+                it.ssid == cleanSsid &&
                         !it.bssid.equals(activeConnection.bssid, ignoreCase = true)
             }
             .maxByOrNull { it.rssi } ?: return null
@@ -82,8 +82,10 @@ object RoamingMonitorEngine {
     ): RoamingEvent? {
         if (previousConn == null || currentConn == null) return null
         if (previousConn.bssid.isBlank() || currentConn.bssid.isBlank()) return null
+        val ssid = previousConn.cleanSsid
+        if (ssid.isBlank() || ssid == "<unknown ssid>" || ssid != currentConn.cleanSsid) return null
 
-        // BSSID changed while keeping the same or comparable network
+        // Only a BSSID change within the same, case-sensitive SSID is a roam.
         if (!previousConn.bssid.equals(currentConn.bssid, ignoreCase = true)) {
             return RoamingEvent(
                 fromBssid = previousConn.bssid,

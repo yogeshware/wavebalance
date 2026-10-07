@@ -31,7 +31,8 @@ data class ChannelScore(
     val conflictingSsids: List<String>,
     val recommendedWidth: ChannelWidth,
     val isCurrentChannel: Boolean = false,
-    val isRecommended: Boolean = false
+    val isRecommended: Boolean = false,
+    val centerFrequencyMhz: Int = frequencyMhz
 )
 
 data class OptimizerRecommendation(
@@ -48,34 +49,14 @@ data class OptimizerRecommendation(
     val ownRadiosIgnored: Int,
     val stepByStepGuide: List<RouterStep>,
     val routerDirectivesText: String,
-    val reasonSummary: String
+    val reasonSummary: String,
+    val recommendedCenterFrequencyMhz: Int = FrequencyBand.channelToFrequency(recommendedChannel, band),
+    val currentCenterFrequencyMhz: Int? = null,
+    val currentBandwidth: ChannelWidth = recommendedBandwidth,
+    val currentChannelEvaluated: Boolean = true
 )
 
 object ChannelOptimizerEngine {
-
-    /**
-     * Standard non-overlapping channels and standard operating frequencies
-     */
-    private val CHANNELS_2_4_GHZ = listOf(1, 6, 11)
-    private val ALL_CHANNELS_2_4_GHZ = (1..11).toList()
-
-    private val CHANNELS_5_GHZ = listOf(
-        // UNII-1
-        36, 40, 44, 48,
-        // UNII-2A (DFS)
-        52, 56, 60, 64,
-        // UNII-2C (DFS)
-        100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
-        // UNII-3
-        149, 153, 157, 161, 165
-    )
-
-    // Primary 80 MHz channel blocks in 5 GHz
-    val PRIMARY_80MHZ_5GHZ = listOf(36, 52, 100, 116, 132, 149)
-
-    private val CHANNELS_6_GHZ_PSC = listOf(
-        37, 53, 69, 85, 101, 117, 133, 149, 165, 181, 197, 213
-    )
 
     fun isDfsChannel(channel: Int, band: FrequencyBand): Boolean {
         return band == FrequencyBand.BAND_5_GHZ && channel in 52..144
@@ -88,66 +69,70 @@ object ChannelOptimizerEngine {
         band: FrequencyBand,
         allAps: List<AccessPoint>,
         currentChannel: Int,
-        targetWidth: ChannelWidth = ChannelWidth.WIDTH_80,
+        targetWidth: ChannelWidth = ChannelWidth.defaultForBand(band),
         // Lowercase BSSIDs from NetworkGroups.ownNetwork(). The user's own radios move with
         // the channel change, so they never count against a candidate channel.
         ownNetworkBssids: Set<String> = emptySet()
     ): OptimizerRecommendation {
-        val candidateChannels = when (band) {
-            FrequencyBand.BAND_2_4_GHZ -> CHANNELS_2_4_GHZ
-            FrequencyBand.BAND_5_GHZ -> CHANNELS_5_GHZ
-            FrequencyBand.BAND_6_GHZ -> CHANNELS_6_GHZ_PSC
-            FrequencyBand.UNKNOWN -> CHANNELS_5_GHZ
-        }
-
-        val (ownAps, apsInBand) = allAps.filter { it.band == band }
+        val effectiveBand = if (band == FrequencyBand.UNKNOWN) FrequencyBand.BAND_5_GHZ else band
+        val width = targetWidth.takeIf { it in ChannelWidth.supportedForBand(effectiveBand) }
+            ?: ChannelWidth.defaultForBand(effectiveBand)
+        val (ownAps, apsInBand) = allAps.filter { it.band == effectiveBand }
             .partition { it.bssid.lowercase() in ownNetworkBssids }
-
-        val scoredChannels = candidateChannels.map { ch ->
-            evaluateChannel(ch, band, apsInBand, currentChannel, targetWidth)
+        val currentBlocks = ChannelPlan.blocksForPrimary(currentChannel, effectiveBand, width)
+        val candidates = (ChannelPlan.candidates(effectiveBand, width) + currentBlocks).distinct()
+        val scoredChannels = candidates.map { evaluateChannel(it, apsInBand, currentChannel) }
+        val connectedAp = allAps.firstOrNull {
+            it.isConnected && it.band == effectiveBand && it.channel == currentChannel
         }
-
-        // Determine recommended channel: highest score, preferring non-DFS if scores are tied or within 3 points
-        val sortedCandidates = scoredChannels.sortedWith(
+        val currentWidth = connectedAp?.channelWidth?.takeIf { it in ChannelWidth.supportedForBand(effectiveBand) } ?: width
+        val currentOptions = ChannelPlan.blocksForPrimary(currentChannel, effectiveBand, currentWidth)
+            .map { evaluateChannel(it, apsInBand, currentChannel) }
+        // Preserve the measured width and center; don't assume the cleanest unobserved placement.
+        val currentScored = currentOptions.firstOrNull { it.centerFrequencyMhz == connectedAp?.centerFrequencyMhz }
+            ?: currentOptions.minByOrNull { it.score }
+            ?: ChannelPlan.blocksForPrimary(currentChannel, effectiveBand, ChannelWidth.WIDTH_20)
+                .firstOrNull()?.let { evaluateChannel(it, apsInBand, currentChannel) }
+        val bestCandidate = scoredChannels.sortedWith(
             compareByDescending<ChannelScore> { it.score }
-                .thenBy { if (it.isDfs) 1 else 0 } // Prefer non-DFS if score is equal
-        )
-
-        val bestCandidate = sortedCandidates.firstOrNull() ?: scoredChannels.first()
-        val currentScored = scoredChannels.find { it.channel == currentChannel }
-            ?: evaluateChannel(currentChannel, band, apsInBand, currentChannel, targetWidth)
+                .thenBy { it.isDfs }
+                .thenBy { if (it.channel == currentScored?.channel && it.centerFrequencyMhz == currentScored.centerFrequencyMhz) 0 else 1 }
+        ).first()
 
         // Mark the recommended channel
         val finalChannelScores = scoredChannels.map { cs ->
             cs.copy(
-                isRecommended = cs.channel == bestCandidate.channel,
-                isCurrentChannel = cs.channel == currentChannel
+                isRecommended = cs.channel == bestCandidate.channel && cs.centerFrequencyMhz == bestCandidate.centerFrequencyMhz,
+                isCurrentChannel = cs.channel == currentScored?.channel && cs.centerFrequencyMhz == currentScored.centerFrequencyMhz && cs.recommendedWidth == currentScored.recommendedWidth
             )
         }
 
-        val scoreDelta = max(0, bestCandidate.score - currentScored.score)
-        val eliminatedCollisions = max(0, currentScored.coChannelCount + currentScored.adjacentChannelCount - (bestCandidate.coChannelCount + bestCandidate.adjacentChannelCount))
+        val scoreDelta = currentScored?.let { max(0, bestCandidate.score - it.score) } ?: 0
+        val eliminatedCollisions = currentScored?.let { max(0, it.coChannelCount + it.adjacentChannelCount - bestCandidate.coChannelCount - bestCandidate.adjacentChannelCount) } ?: 0
 
         val stepByStep = buildStepByStepGuide(
-            band = band,
+            band = effectiveBand,
             currentChannel = currentChannel,
             recommendedChannel = bestCandidate.channel,
-            bandwidth = targetWidth,
-            isDfs = bestCandidate.isDfs
+            bandwidth = width,
+            isDfs = bestCandidate.isDfs,
+            centerFrequencyMhz = bestCandidate.centerFrequencyMhz
         )
 
         val directivesText = buildClipboardDirectives(
-            band = band,
+            band = effectiveBand,
             currentChannel = currentChannel,
             recommendedChannel = bestCandidate.channel,
-            bandwidth = targetWidth,
-            currentScore = currentScored.score,
+            bandwidth = width,
+            currentScore = currentScored?.score,
             recommendedScore = bestCandidate.score,
-            isDfs = bestCandidate.isDfs
+            isDfs = bestCandidate.isDfs,
+            centerFrequencyMhz = bestCandidate.centerFrequencyMhz
         )
 
         val reason = when {
-            bestCandidate.channel == currentChannel && currentScored.score >= 90 ->
+            currentScored == null -> "The current channel could not be evaluated. Compare the supported candidate blocks below."
+            bestCandidate.channel == currentChannel && bestCandidate.centerFrequencyMhz == currentScored.centerFrequencyMhz && width == currentScored.recommendedWidth && currentScored.score >= 90 ->
                 "Your current Channel $currentChannel is already optimal with minimal spectral congestion."
             scoreDelta >= 25 ->
                 "Shifting to Channel ${bestCandidate.channel} avoids $eliminatedCollisions conflicting networks, boosting signal clarity by +$scoreDelta pts."
@@ -158,19 +143,23 @@ object ChannelOptimizerEngine {
         }
 
         return OptimizerRecommendation(
-            band = band,
+            band = effectiveBand,
             currentChannel = currentChannel,
-            currentScore = currentScored.score,
+            currentScore = currentScored?.score ?: 0,
             recommendedChannel = bestCandidate.channel,
             recommendedScore = bestCandidate.score,
-            recommendedBandwidth = targetWidth,
+            recommendedBandwidth = width,
             scoreDelta = scoreDelta,
             eliminatedCollisions = eliminatedCollisions,
             channelScores = finalChannelScores,
             ownRadiosIgnored = ownAps.size,
             stepByStepGuide = stepByStep,
             routerDirectivesText = directivesText,
-            reasonSummary = reason
+            reasonSummary = reason,
+            recommendedCenterFrequencyMhz = bestCandidate.centerFrequencyMhz,
+            currentCenterFrequencyMhz = currentScored?.centerFrequencyMhz,
+            currentBandwidth = currentScored?.recommendedWidth ?: width,
+            currentChannelEvaluated = currentScored != null
         )
     }
 
@@ -178,14 +167,15 @@ object ChannelOptimizerEngine {
      * Compute RF congestion score for a specific channel
      */
     private fun evaluateChannel(
-        channel: Int,
-        band: FrequencyBand,
+        block: ChannelBlock,
         apsInBand: List<AccessPoint>,
-        currentChannel: Int,
-        targetWidth: ChannelWidth
+        currentChannel: Int
     ): ChannelScore {
-        val freqMhz = FrequencyBand.channelToFrequency(channel, band)
-        val candidateEnv = ApMetricsCalculator.getFrequencyEnvelope(freqMhz, targetWidth)
+        val channel = block.primaryChannel
+        val band = block.band
+        val targetWidth = block.width
+        val freqMhz = block.primaryFrequencyMhz
+        val candidateEnv = ApMetricsCalculator.getFrequencyEnvelope(block.centerFrequencyMhz, targetWidth)
 
         var penaltyTotal = 0.0
         var coChannelCount = 0
@@ -226,7 +216,7 @@ object ChannelOptimizerEngine {
             }
         }
 
-        val isDfs = isDfsChannel(channel, band)
+        val isDfs = block.isDfs
         // Minor penalty for DFS channels if non-DFS is equally clean (DFS requires channel evacuation on radar detection)
         if (isDfs) {
             penaltyTotal += 4.0
@@ -253,7 +243,8 @@ object ChannelOptimizerEngine {
             conflictingSsids = conflictingSsids.distinct().take(4),
             recommendedWidth = targetWidth,
             isCurrentChannel = channel == currentChannel,
-            isRecommended = false
+            isRecommended = false,
+            centerFrequencyMhz = block.centerFrequencyMhz
         )
     }
 
@@ -262,7 +253,8 @@ object ChannelOptimizerEngine {
         currentChannel: Int,
         recommendedChannel: Int,
         bandwidth: ChannelWidth,
-        isDfs: Boolean
+        isDfs: Boolean,
+        centerFrequencyMhz: Int
     ): List<RouterStep> {
         val bandLabel = when (band) {
             FrequencyBand.BAND_2_4_GHZ -> "2.4 GHz"
@@ -287,13 +279,13 @@ object ChannelOptimizerEngine {
             RouterStep(
                 stepNumber = 3,
                 title = "Change Control Channel",
-                description = "Switch 'Channel' or 'Control Channel' from Channel $currentChannel to Channel $recommendedChannel. Avoid 'Auto' channel to lock in this interference-free frequency.",
+                description = "Set 'Channel' or 'Control Channel' to Channel $recommendedChannel. Confirm the candidate is supported by your router and country before selecting it.",
                 parameterHighlight = "Channel $recommendedChannel"
             ),
             RouterStep(
                 stepNumber = 4,
                 title = "Configure Channel Bandwidth",
-                description = "Set 'Channel Bandwidth' to ${bandwidth.label} for optimal throughput and clean spectral boundary enforcement.",
+                description = "Set bandwidth to ${bandwidth.label} and center frequency to $centerFrequencyMhz MHz (center channel ${FrequencyBand.frequencyToChannel(centerFrequencyMhz)}). ${if (bandwidth == ChannelWidth.WIDTH_40) "Select the secondary channel " + (if (centerFrequencyMhz > FrequencyBand.channelToFrequency(recommendedChannel, band)) "above" else "below") + " the primary. " else ""} Verify this combination is available on your router.",
                 parameterHighlight = bandwidth.label
             )
         )
@@ -303,7 +295,7 @@ object ChannelOptimizerEngine {
                 RouterStep(
                     stepNumber = 5,
                     title = "DFS Radar Scan Notice",
-                    description = "Channel $recommendedChannel operates within the UNII-2 DFS spectrum. Your router will perform a brief 60-second Channel Availability Check (CAC) before broadcasting.",
+                    description = "This bonded block includes DFS spectrum. Your router may require a channel-availability check and must vacate it if radar is detected; timing depends on region and channel.",
                     parameterHighlight = "DFS Radar CAC"
                 )
             )
@@ -313,7 +305,7 @@ object ChannelOptimizerEngine {
             RouterStep(
                 stepNumber = if (isDfs) 6 else 5,
                 title = "Apply & Reboot",
-                description = "Click 'Apply' or 'Save Settings'. Your router will restart the $bandLabel radio. Reconnecting devices will now communicate on pristine spectrum!",
+                description = "Click 'Apply' or 'Save Settings'. Your router will restart the $bandLabel radio. Reconnect and scan again to verify the result; neighbor activity can change.",
                 parameterHighlight = "Save & Apply"
             )
         )
@@ -326,9 +318,10 @@ object ChannelOptimizerEngine {
         currentChannel: Int,
         recommendedChannel: Int,
         bandwidth: ChannelWidth,
-        currentScore: Int,
+        currentScore: Int?,
         recommendedScore: Int,
-        isDfs: Boolean
+        isDfs: Boolean,
+        centerFrequencyMhz: Int
     ): String {
         val bandLabel = when (band) {
             FrequencyBand.BAND_2_4_GHZ -> "2.4 GHz"
@@ -342,15 +335,18 @@ object ChannelOptimizerEngine {
             WAVEBALANCE WI-FI OPTIMIZATION DIRECTIVES
             =========================================
             Target Radio: $bandLabel Wireless Network
-            Current Channel: Ch $currentChannel (RF Health Score: $currentScore/100)
+            Current Channel: ${if (currentScore != null) "Ch $currentChannel (RF Health Score: $currentScore/100)" else "Not evaluated"}
             RECOMMENDED CHANNEL: Ch $recommendedChannel (RF Health Score: $recommendedScore/100)
             Recommended Bandwidth: ${bandwidth.label}
-            Spectrum Type: ${if (isDfs) "UNII-2 DFS (Radar Detection Active)" else "Standard Non-DFS (Universal Support)"}
+            Center Frequency: $centerFrequencyMhz MHz (center channel ${FrequencyBand.frequencyToChannel(centerFrequencyMhz)})
+            ${if (bandwidth == ChannelWidth.WIDTH_40) "Secondary Channel: " + if (centerFrequencyMhz > FrequencyBand.channelToFrequency(recommendedChannel, band)) "Above" else "Below" else ""}
+            Availability: Verify this channel/width in your router and country.
+            Spectrum Type: ${if (isDfs) "UNII-2 DFS (Radar Detection Active)" else "Non-DFS candidate (verify router and regional support)"}
             
             ROUTER ACTION STEPS:
             1. Open Router Admin: http://192.168.1.1 (or router gateway)
             2. Go to: Wireless / Wi-Fi Settings -> $bandLabel Radio
-            3. Set Channel: Change from $currentChannel -> $recommendedChannel
+            3. Set Channel: $recommendedChannel
             4. Set Channel Width: ${bandwidth.label}
             5. Save & Reboot Router
             =========================================

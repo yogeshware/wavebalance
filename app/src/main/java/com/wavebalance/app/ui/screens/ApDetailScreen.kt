@@ -84,7 +84,7 @@ fun ApDetailScreen(
     onNavigateBack: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val allAps by viewModel.filteredAccessPoints.collectAsState()
+    val allAps by viewModel.allAccessPoints.collectAsState()
     val activeConn by viewModel.activeConnection.collectAsState()
     val selectedApState by viewModel.selectedAp.collectAsState()
     val rssiHistoryMap by viewModel.rssiHistory.collectAsState()

@@ -162,6 +162,19 @@ class SpeedTestRunTest {
     }
 
     @Test
+    fun transferEndingDuringWarmup_doesNotPublishACompletedResult() {
+        val states = SpeedDiagnosticEngine.runSpeedTest(
+            FakeServer(streamDurationMs = 50),
+            config.copy(phaseDurationMs = 10_000, warmupMs = 2_000)
+        ).run()
+
+        assertEquals(DiagnosticPhase.FAILED, states.last().phase)
+        assertNull(states.last().result)
+        assertTrue(states.last().error!!.contains("warm-up"))
+        assertTrue(states.none { it.phase == DiagnosticPhase.UPLOAD })
+    }
+
+    @Test
     fun rateMath() {
         // 1, 2 and 3 MB in successive seconds: 8, 16 and 24 Mbps
         val samples = listOf(

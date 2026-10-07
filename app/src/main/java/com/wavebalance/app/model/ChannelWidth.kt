@@ -10,6 +10,16 @@ enum class ChannelWidth(val mhz: Int, val label: String) {
     UNKNOWN(20, "Unknown");
 
     companion object {
+        fun supportedForBand(band: FrequencyBand): List<ChannelWidth> = when (band) {
+            FrequencyBand.BAND_2_4_GHZ -> listOf(WIDTH_20, WIDTH_40)
+            FrequencyBand.BAND_5_GHZ -> listOf(WIDTH_20, WIDTH_40, WIDTH_80, WIDTH_160)
+            FrequencyBand.BAND_6_GHZ -> listOf(WIDTH_20, WIDTH_40, WIDTH_80, WIDTH_160, WIDTH_320)
+            FrequencyBand.UNKNOWN -> listOf(WIDTH_20, WIDTH_40, WIDTH_80)
+        }
+
+        fun defaultForBand(band: FrequencyBand): ChannelWidth =
+            if (band == FrequencyBand.BAND_2_4_GHZ) WIDTH_20 else WIDTH_80
+
         fun fromScanResult(widthInt: Int): ChannelWidth {
             return when (widthInt) {
                 0 -> WIDTH_20

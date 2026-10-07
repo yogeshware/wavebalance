@@ -18,6 +18,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URI
+import java.net.URISyntaxException
 import java.net.UnknownHostException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -250,6 +251,16 @@ class MLabNdt7Server(
         private fun payload(size: Int): ByteString =
             synchronized(payloads) { payloads.getOrPut(size) { randomBytes.toByteString(0, size) } }
 
+        private fun secureWebSocketUri(url: String): URI? = try {
+            URI(url).takeIf {
+                it.scheme.equals("wss", ignoreCase = true) &&
+                    !it.host.isNullOrBlank() && it.rawUserInfo == null &&
+                    (it.port == -1 || it.port in 1..65535)
+            }
+        } catch (e: URISyntaxException) {
+            null
+        }
+
         /** The results offering ndt7 download and upload over TLS, in the locator's order. */
         internal fun parseLocateResponse(json: String): List<LocatedServer> {
             val servers = mutableListOf<LocatedServer>()
@@ -257,11 +268,12 @@ class MLabNdt7Server(
                 val results = JSONObject(json).optJSONArray("results")
                 if (results != null) {
                     for (i in 0 until results.length()) {
-                        val result = results.getJSONObject(i)
+                        val result = results.optJSONObject(i) ?: continue
                         val urls = result.optJSONObject("urls") ?: continue
                         val download = urls.optString("wss:///ndt/v7/download").ifBlank { null } ?: continue
                         val upload = urls.optString("wss:///ndt/v7/upload").ifBlank { null } ?: continue
-                        val host = URI(download).host ?: continue
+                        val host = secureWebSocketUri(download)?.host ?: continue
+                        if (secureWebSocketUri(upload) == null) continue
                         val city = result.optJSONObject("location")?.optString("city")?.ifBlank { null }
                         servers += LocatedServer(host, city, download, upload)
                     }

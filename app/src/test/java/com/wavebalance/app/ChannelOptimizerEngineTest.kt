@@ -14,6 +14,46 @@ import org.junit.Test
 
 class ChannelOptimizerEngineTest {
 
+    @Test
+    fun defaultWidthOn24Ghz_is20MhzInScoresAndRouterInstructions() {
+        val recommendation = ChannelOptimizerEngine.evaluateBand(
+            band = FrequencyBand.BAND_2_4_GHZ,
+            allAps = emptyList(),
+            currentChannel = 6
+        )
+
+        assertEquals(ChannelWidth.WIDTH_20, recommendation.recommendedBandwidth)
+        assertTrue(recommendation.channelScores.all { it.recommendedWidth == ChannelWidth.WIDTH_20 })
+        assertTrue(recommendation.routerDirectivesText.contains("Recommended Bandwidth: 20 MHz"))
+        assertTrue(recommendation.stepByStepGuide.any { it.parameterHighlight == "20 MHz" })
+    }
+
+    @Test
+    fun unsupportedWidths_fallBackToABandAppropriateWidth() {
+        val cases = listOf(
+            Triple(FrequencyBand.BAND_2_4_GHZ, ChannelWidth.WIDTH_160, ChannelWidth.WIDTH_20),
+            Triple(FrequencyBand.BAND_5_GHZ, ChannelWidth.WIDTH_320, ChannelWidth.WIDTH_80),
+            Triple(FrequencyBand.BAND_6_GHZ, ChannelWidth.UNKNOWN, ChannelWidth.WIDTH_80)
+        )
+        for ((band, requested, expected) in cases) {
+            val recommendation = ChannelOptimizerEngine.evaluateBand(band, emptyList(), 1, requested)
+            assertEquals(expected, recommendation.recommendedBandwidth)
+            assertTrue(recommendation.channelScores.all { it.recommendedWidth == expected })
+        }
+    }
+
+    @Test
+    fun supportedWidths_arePreserved() {
+        for ((band, width) in listOf(
+            FrequencyBand.BAND_2_4_GHZ to ChannelWidth.WIDTH_40,
+            FrequencyBand.BAND_5_GHZ to ChannelWidth.WIDTH_160,
+            FrequencyBand.BAND_6_GHZ to ChannelWidth.WIDTH_320
+        )) {
+            val recommendation = ChannelOptimizerEngine.evaluateBand(band, emptyList(), 1, width)
+            assertEquals(width, recommendation.recommendedBandwidth)
+        }
+    }
+
     private val testApCurrent = AccessPoint(
         bssid = "aa:bb:cc:dd:ee:01",
         ssid = "MyHome_5G",
